@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Algo Backtesting & Trading Portal</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+      padding: 20px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .header h1 {
+      font-size: 32px;
+      color: #00d4ff;
+      margin-bottom: 8px;
+      text-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+    }
+
+    .header p {
+      color: #aaa;
+      font-size: 14px;
+    }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 968px) {
+      .dashboard {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: rgba(30, 30, 50, 0.8);
+      border-radius: 12px;
+      padding: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      backdrop-filter: blur(10px);
+    }
+
+    .card-title {
+      font-size: 20px;
+      color: #00d4ff;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-title::before {
+      content: '●';
+      color: #00ff88;
+      font-size: 12px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 14px;
+      color: #aaa;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+
+    .form-select {
+      width: 100%;
+      padding: 12px 16px;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .form-select:hover {
+      border-color: #00d4ff;
+      background: rgba(0, 0, 0, 0.4);
+    }
+
+    .form-select:focus {
+      outline: none;
+      border-color: #00d4ff;
+      box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1);
+    }
+
+    .btn {
+      width: 100%;
+      padding: 14px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+    }
+
+    .btn-success {
+      background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+      color: white;
+      box-shadow: 0 4px 15px rgba(56, 239, 125, 0.4);
+    }
+
+    .btn-success:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(56, 239, 125, 0.6);
+    }
+
+    .btn-danger {
+      background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+      color: white;
+      box-shadow: 0 4px 15px rgba(235, 51, 73, 0.4);
+    }
+
+    .btn-danger:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(235, 51, 73, 0.6);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    .results {
+      margin-top: 24px;
+      padding: 20px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .results.hidden {
+      display: none;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .stat {
+      text-align: center;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .stat-label {
+      font-size: 12px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-size: 28px;
+      font-weight: bold;
+    }
+
+    .stat-value.wins {
+      color: #00ff88;
+    }
+
+    .stat-value.losses {
+      color: #ff4757;
+    }
+
+    .stat-value.accuracy {
+      color: #00d4ff;
+    }
+
+    .loading {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 3px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: #00d4ff;
+      animation: spin 1s linear infinite;
+      margin-left: 8px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .status-log {
+      margin-top: 20px;
+      padding: 16px;
+      background: rgba(0, 0, 0, 0.4);
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      max-height: 400px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+    }
+
+    .status-log.hidden {
+      display: none;
+    }
+
+    .log-entry {
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .log-entry:last-child {
+      border-bottom: none;
+    }
+
+    .log-timestamp {
+      color: #666;
+      font-size: 11px;
+      margin-right: 8px;
+    }
+
+    .log-status {
+      color: #00d4ff;
+      margin-right: 4px;
+    }
+
+    .log-trade {
+      color: #00ff88;
+      font-weight: bold;
+      margin-right: 4px;
+    }
+
+    .log-error {
+      color: #ff4757;
+      margin-right: 4px;
+    }
+
+    .indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+      animation: pulse 2s infinite;
+    }
+
+    .indicator.active {
+      background: #00ff88;
+    }
+
+    .indicator.inactive {
+      background: #666;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .algo-info {
+      margin-top: 12px;
+      padding: 12px;
+      background: rgba(0, 212, 255, 0.1);
+      border-left: 3px solid #00d4ff;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #aaa;
+    }
+
+    .details-list {
+      margin-top: 16px;
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 6px;
+      font-size: 12px;
+    }
+
+    .details-list div {
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .details-list div:last-child {
+      border-bottom: none;
+    }
+
+    .full-width {
+      grid-column: 1 / -1;
+    }
+
+    .connection-status {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 12px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 20px;
+      font-size: 12px;
+      margin-left: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1>⚡ Algo Backtesting & Trading Portal</h1>
+      <p>Polymarket Algorithmic Trading Platform</p>
+    </div>
+
+    <!-- Dashboard Grid -->
+    <div class="dashboard">
+      <!-- Backtesting Panel -->
+      <div class="card">
+        <div class="card-title">📊 Backtesting</div>
+        
+        <div class="form-group">
+          <label class="form-label">Select Algorithm</label>
+          <select id="algoSelect" class="form-select">
+            <option value="algo1">Algo 1 - Smart Ape Strategy</option>
+            <option value="algo2">Algo 2 - Delta + Time Momentum</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Time Window</label>
+          <select id="timeWindow" class="form-select">
+            <option value="5">Past 5 Events</option>
+          </select>
+        </div>
+
+        <div class="algo-info" id="algoInfo">
+          <strong>Smart Ape Strategy:</strong> Uses momentum and time pressure thresholds to identify strong directional moves (Delta > ±200, Time < 180s).
+        </div>
+
+        <button id="backtestBtn" class="btn btn-primary">
+          Run Backtest
+        </button>
+
+        <!-- Results -->
+        <div id="backtestResults" class="results hidden">
+          <div class="stats">
+            <div class="stat">
+              <div class="stat-label">Past Markets</div>
+              <div class="stat-value wins" id="winsValue">0</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">UP Won</div>
+              <div class="stat-value losses" id="lossesValue">0</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">DOWN Won</div>
+              <div class="stat-value accuracy" id="accuracyValue">0</div>
+            </div>
+          </div>
+          
+          <div class="details-list" id="detailsList"></div>
+        </div>
+      </div>
+
+      <!-- Live Trading Panel -->
+      <div class="card">
+        <div class="card-title">
+          🚀 Live Trading
+          <span class="connection-status">
+            <span class="indicator inactive" id="connectionIndicator"></span>
+            <span id="connectionText">Not Connected</span>
+          </span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Selected Algorithm</label>
+          <select id="liveAlgoSelect" class="form-select">
+            <option value="algo1">Algo 1 - Smart Ape Strategy</option>
+            <option value="algo2">Algo 2 - Delta + Time Momentum</option>
+          </select>
+        </div>
+
+        <button id="deployBtn" class="btn btn-success">
+          Deploy Algorithm
+        </button>
+
+        <button id="stopBtn" class="btn btn-danger hidden" style="margin-top: 12px;">
+          Stop Trading
+        </button>
+
+        <!-- Status Log -->
+        <div id="statusLog" class="status-log hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ==========================================
+    // STATE MANAGEMENT
+    // ==========================================
+    
+    let currentSessionId = null;
+    let ws = null;
+
+    // ==========================================
+    // DOM ELEMENTS
+    // ==========================================
+    
+    const algoSelect = document.getElementById('algoSelect');
+    const algoInfo = document.getElementById('algoInfo');
+    const backtestBtn = document.getElementById('backtestBtn');
+    const backtestResults = document.getElementById('backtestResults');
+    const winsValue = document.getElementById('winsValue');
+    const lossesValue = document.getElementById('lossesValue');
+    const accuracyValue = document.getElementById('accuracyValue');
+    const detailsList = document.getElementById('detailsList');
+    
+    const liveAlgoSelect = document.getElementById('liveAlgoSelect');
+    const deployBtn = document.getElementById('deployBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusLog = document.getElementById('statusLog');
+    const connectionIndicator = document.getElementById('connectionIndicator');
+    const connectionText = document.getElementById('connectionText');
+
+    // ==========================================
+    // ALGO INFO UPDATE
+    // ==========================================
+    
+    const algoDescriptions = {
+      algo1: '<strong>Smart Ape Strategy:</strong> Aggressive momentum trading with time pressure (Delta > ±100, Time < 240s). Captures strong directional moves.',
+      algo2: '<strong>Delta + Time Momentum:</strong> More aggressive entry with relaxed thresholds (Delta > ±50, Time < 150s). Higher trade frequency.'
+    };
+
+    algoSelect.addEventListener('change', () => {
+      algoInfo.innerHTML = algoDescriptions[algoSelect.value];
+    });
+
+    // ==========================================
+    // BACKTESTING
+    // ==========================================
+    
+    backtestBtn.addEventListener('click', async () => {
+      const algo = algoSelect.value;
+      
+      // Update UI
+      backtestBtn.disabled = true;
+      backtestBtn.innerHTML = 'Running Backtest <span class="loading"></span>';
+      backtestResults.classList.add('hidden');
+      
+      try {
+        const response = await fetch(`/api/backtest?algo=${algo}`);
+        const data = await response.json();
+        
+        if (data.success) {
+          // Show note about API limitations
+          const note = data.note ? `<div style="background: rgba(255,193,7,0.1); padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 3px solid #ffc107;">
+            <strong>ℹ️ Note:</strong> ${data.note}
+          </div>` : '';
+          
+          // Count UP and DOWN wins
+          const upWins = data.results.filter(r => r.actualResult === 'UP').length;
+          const downWins = data.results.filter(r => r.actualResult === 'DOWN').length;
+          
+          // Update stats to show market count and outcome distribution
+          winsValue.textContent = data.results.length;
+          lossesValue.textContent = upWins;
+          accuracyValue.textContent = downWins;
+          
+          // Update details to show past outcomes only
+          detailsList.innerHTML = note + data.results.map(r => `
+            <div style="padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <strong>Market ${r.event}:</strong> 
+              ${r.question ? `<br><em style="font-size: 11px; color: #888;">${r.question.substring(0, 80)}...</em><br>` : ''}
+              Outcome: <span style="color: ${r.actualResult === 'UP' ? '#00ff88' : '#ff4757'}; font-weight: bold;">
+                ${r.actualResult} WON
+              </span>
+            </div>
+          `).join('');
+          
+          // Show results
+          backtestResults.classList.remove('hidden');
+        } else {
+          alert('Backtest failed: ' + data.error);
+        }
+      } catch (error) {
+        alert('Error running backtest: ' + error.message);
+      } finally {
+        backtestBtn.disabled = false;
+        backtestBtn.textContent = 'Run Backtest';
+      }
+    });
+
+    // ==========================================
+    // LIVE TRADING
+    // ==========================================
+    
+    deployBtn.addEventListener('click', async () => {
+      const algo = liveAlgoSelect.value;
+      
+      deployBtn.disabled = true;
+      deployBtn.innerHTML = 'Deploying... <span class="loading"></span>';
+      
+      try {
+        const response = await fetch(`/api/deploy?algo=${algo}`, {
+          method: 'POST'
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+          currentSessionId = data.sessionId;
+          
+          // Update UI
+          deployBtn.classList.add('hidden');
+          stopBtn.classList.remove('hidden');
+          statusLog.classList.remove('hidden');
+          
+          // Initialize WebSocket
+          initWebSocket();
+          
+          // Log deployment
+          addLogEntry('status', `Deployed ${algo} - Session ID: ${currentSessionId}`);
+          addLogEntry('status', `Market: ${data.marketSlug}`);
+        } else {
+          alert('Deployment failed: ' + data.error);
+        }
+      } catch (error) {
+        alert('Error deploying algo: ' + error.message);
+      } finally {
+        deployBtn.disabled = false;
+        deployBtn.textContent = 'Deploy Algorithm';
+      }
+    });
+
+    stopBtn.addEventListener('click', async () => {
+      if (!currentSessionId) return;
+      
+      try {
+        const response = await fetch('/api/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: currentSessionId })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+          addLogEntry('status', 'Trading session stopped');
+          resetLiveTrading();
+        }
+      } catch (error) {
+        alert('Error stopping session: ' + error.message);
+      }
+    });
+
+    // ==========================================
+    // WEBSOCKET
+    // ==========================================
+    
+    function initWebSocket() {
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${wsProtocol}//${window.location.host}`);
+      
+      ws.onopen = () => {
+        updateConnectionStatus(true);
+        addLogEntry('status', 'WebSocket connected');
+      };
+      
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        handleWebSocketMessage(data);
+      };
+      
+      ws.onclose = () => {
+        updateConnectionStatus(false);
+        addLogEntry('status', 'WebSocket disconnected');
+      };
+      
+      ws.onerror = (error) => {
+        addLogEntry('error', 'WebSocket error occurred');
+        console.error('WebSocket error:', error);
+      };
+    }
+
+    function handleWebSocketMessage(data) {
+      switch (data.type) {
+        case 'connected':
+          addLogEntry('status', data.message);
+          break;
+          
+        case 'status':
+          addLogEntry('status', data.message);
+          break;
+          
+        case 'trade':
+          const demoLabel = data.demo ? '[DEMO] ' : '';
+          addLogEntry('trade', 
+            `${demoLabel}TRADE EXECUTED: ${data.signal} ${data.shares} shares @ $${data.price} | ` +
+            `Delta: ${data.delta} | Time: ${data.timeLeft}s | ` +
+            `Wallet: ${data.wallet} | ` +
+            `Total Trades: ${data.tradesExecuted}`
+          );
+          break;
+          
+        case 'market_update':
+          // Update connection text with live data
+          connectionText.textContent = `Delta: ${data.delta} | Time: ${data.timeLeft}s`;
+          break;
+          
+        case 'error':
+          addLogEntry('error', data.message);
+          break;
+      }
+    }
+
+    function addLogEntry(type, message) {
+      const timestamp = new Date().toLocaleTimeString();
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      
+      let prefix = '';
+      if (type === 'trade') {
+        prefix = '<span class="log-trade">🎯 TRADE</span>';
+      } else if (type === 'error') {
+        prefix = '<span class="log-error">❌ ERROR</span>';
+      } else {
+        prefix = '<span class="log-status">📡 STATUS</span>';
+      }
+      
+      entry.innerHTML = `
+        <span class="log-timestamp">[${timestamp}]</span>
+        ${prefix}
+        ${message}
+      `;
+      
+      statusLog.insertBefore(entry, statusLog.firstChild);
+      
+      // Keep max 50 entries
+      while (statusLog.children.length > 50) {
+        statusLog.removeChild(statusLog.lastChild);
+      }
+    }
+
+    function updateConnectionStatus(connected) {
+      if (connected) {
+        connectionIndicator.className = 'indicator active';
+        connectionText.textContent = 'Connected - Monitoring';
+      } else {
+        connectionIndicator.className = 'indicator inactive';
+        connectionText.textContent = 'Not Connected';
+      }
+    }
+
+    function resetLiveTrading() {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      
+      currentSessionId = null;
+      deployBtn.classList.remove('hidden');
+      stopBtn.classList.add('hidden');
+      updateConnectionStatus(false);
+    }
+
+    // ==========================================
+    // INITIALIZATION
+    // ==========================================
+    
+    console.log('🚀 Algo Trading Portal Initialized');
+  </script>
+</body>
+</html>
