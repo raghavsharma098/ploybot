@@ -4,9 +4,11 @@ const WebSocket = require('ws');
 const fetch = require('node-fetch');
 const { RealTimeDataClient } = require('@polymarket/real-time-data-client');
 const { ClobClient } = require('@polymarket/clob-client');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { ethers } = require('ethers');
 const path = require('path');
 const fs = require('fs');
+const FUNDER_ADDRESS = '0xAc7e9B052e3f02271340c1802986Bd7fB0F4b190';
 
 // Load environment variables from .env file
 const envPath = path.join(__dirname, '.env');
@@ -28,9 +30,25 @@ const wss = new WebSocket.Server({ server });
 const PORT = 3000;
 const GAMMA_API = 'https://gamma-api.polymarket.com';
 const CLOB_API = 'https://clob.polymarket.com';
-const POLYMARKET_API_KEY = '0x9b9c4077bdef1bdd628bf5721f02473085f9e3a26ef7efd3f98e0557816b04ea';
 const WALLET_ADDRESS = ENV.WALLET_ADDRESS || '0xAc7e9B052e3f02271340c1802986Bd7fB0F4b190';
 const WALLET_PRIVATE_KEY = ENV.WALLET_PRIVATE_KEY;
+const GEMINI_API_KEY = ENV.GEMINI_API_KEY;
+const POLYMARKET_API_KEY = ENV.POLYMARKET_API_KEY;
+const POLYMARKET_API_SECRET = ENV.POLYMARKET_API_SECRET;
+const POLYMARKET_API_PASSPHRASE = ENV.POLYMARKET_API_PASSPHRASE;
+
+// Initialize Gemini AI
+let genAI = null;
+let geminiModel = null;
+if (GEMINI_API_KEY) {
+  try {
+    genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    geminiModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+    console.log(`✅ Gemini AI initialized with gemini-2.0-flash-exp`);
+  } catch (err) {
+    console.error('❌ Gemini initialization error:', err.message);
+  }
+}
 
 // Trading configuration
 const TRADE_CONFIG = {
@@ -39,29 +57,105 @@ const TRADE_CONFIG = {
   maxSlippage: parseFloat(ENV.MAX_SLIPPAGE) || 0.05
 };
 
+// Debug trading configuration
+console.log('🔧 Trading Configuration:');
+console.log(`   ENV.TRADE_ENABLED: "${ENV.TRADE_ENABLED}"`);
+console.log(`   WALLET_PRIVATE_KEY exists: ${WALLET_PRIVATE_KEY !== undefined}`);
+console.log(`   TRADE_CONFIG.enabled: ${TRADE_CONFIG.enabled}`);
+
 // Initialize wallet for signing if private key available
 let wallet = null;
 let clobClient = null;
 
-if (WALLET_PRIVATE_KEY) {
+// Order queue to ensure sequential order placement
+let isOrderProcessing = false;
+const orderQueue = [];
+
+async function processOrderQueue() {
+  if (isOrderProcessing || orderQueue.length === 0) return;
+  
+  isOrderProcessing = true;
+  const { tokenId, side, resolve, reject } = orderQueue.shift();
+  
+  console.log(`\n📦 Processing order from queue (${orderQueue.length} remaining)...`);
+  
   try {
-    wallet = new ethers.Wallet(WALLET_PRIVATE_KEY);
-    console.log(`✅ Wallet initialized: ${wallet.address}`);
-    
-    // Initialize CLOB client for order submission
-    clobClient = new ClobClient(
-      'https://clob.polymarket.com',
-      137, // Polygon mainnet chain ID
-      wallet
-    );
-    console.log(`✅ CLOB client initialized`);
-  } catch (err) {
-    console.error('❌ Initialization error:', err.message);
+    const result = await placeOrderInternal(tokenId, side);
+    resolve(result);
+  } catch (error) {
+    reject(error);
+  } finally {
+    isOrderProcessing = false;
+    // Process next order after a small delay
+    setTimeout(() => processOrderQueue(), 1000);
   }
+}
+
+function queueOrder(tokenId, side) {
+  return new Promise((resolve, reject) => {
+    orderQueue.push({ tokenId, side, resolve, reject });
+    console.log(`➕ Order added to queue (position: ${orderQueue.length})`);
+    processOrderQueue();
+  });
+}
+
+(async () => {
+  if (!WALLET_PRIVATE_KEY) {
+    console.warn('⚠️ No wallet private key – trading disabled');
+    return;
+  }
+
+  try {
+    await initClobClient();   // ✅ WAIT HERE
+  } catch (err) {
+    console.error('❌ Failed to init CLOB client:', err.message);
+    process.exit(1);          // ⛔ STOP SERVER
+  }
+})();
+
+   const { Side } = require('@polymarket/clob-client');
+
+async function initClobClient() {
+  // ✅ EXACT SAME AS wallet.js
+  const signer = new ethers.Wallet(WALLET_PRIVATE_KEY);
+
+  // ✅ USE HARDCODED FUNDER ADDRESS (SAME AS wallet.js)
+  const funder = '0xAc7e9B052e3f02271340c1802986Bd7fB0F4b190';
+
+  console.log('🔑 Signer:', signer.address);
+  console.log('💰 Funder:', funder);
+
+  const CHAIN_ID = 137;
+  const SIGNATURE_TYPE = 1;
+
+  // TEMP CLIENT → API KEY
+  const tempClient = new ClobClient(
+    CLOB_API,
+    CHAIN_ID,
+    signer
+  );
+
+  const creds = await tempClient.createOrDeriveApiKey();
+  console.log('✅ Polymarket API key derived');
+
+  // ✅ EXACT SAME AS wallet.js - use funder address
+  clobClient = new ClobClient(
+    CLOB_API,
+    CHAIN_ID,
+    signer,
+    creds,
+    SIGNATURE_TYPE,
+    funder  // Use funder address (0xAc7e9B052e3f02271340c1802986Bd7fB0F4b190)
+  );
+
+  console.log('✅ CLOB client initialized (wallet.js behavior)');
 }
 
 // Store active trading sessions
 const activeSessions = new Map();
+
+// Store custom algorithms created via natural language
+const customAlgorithms = new Map();
 
 // Middleware
 app.use(express.json());
@@ -71,7 +165,6 @@ app.use(express.static(__dirname));
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
-
 
 /**
  * Resolve market slug to token IDs
@@ -264,13 +357,14 @@ async function findActiveBTCMarket() {
 }
 
 /**
- * Generate next 15-minute market timestamp
+ * Generate CURRENT 15-minute market timestamp
  */
 function getNext15MinuteTimestamp() {
   const now = Date.now();
   const fifteenMinutes = 15 * 60 * 1000;
-  const next = Math.ceil(now / fifteenMinutes) * fifteenMinutes;
-  return Math.floor(next / 1000);
+  // Use CURRENT market, not next one
+  const current = Math.floor(now / fifteenMinutes) * fifteenMinutes;
+  return Math.floor(current / 1000);
 }
 
 /**
@@ -282,75 +376,127 @@ function generateMarketSlug() {
 }
 
 /**
- * Place a real order on Polymarket CLOB
+ * Place a real order on Polymarket CLOB (wrapper for queue)
  */
-async function placeOrder(tokenId, side, price, size) {
+async function placeOrder(tokenId, side) {
+  return await queueOrder(tokenId, side);
+}
+
+/**
+ * Internal order placement function (called by queue)
+ */
+async function placeOrderInternal(tokenId, side) {
+
+  // 🔥 FORCE EXACTLY 5 SHARES (ONE ORDER ONLY)
+
+const orderbook = await clobClient.getOrderBook(tokenId);
+
+if (!orderbook?.asks?.length) {
+  console.log('⚠️ No asks in orderbook — skipping order');
+  return { simulated: true, success: false };
+}
+
+// Best ask price
+const bestAsk = Number(orderbook.asks[0].price);
+
+// Slightly below best ask (maker order, safe)
+let orderPrice = Math.max(0.01, bestAsk - 0.01);
+orderPrice = Number(orderPrice.toFixed(2));
+
+// FIXED: Exactly 5 shares (Polymarket minimum)
+const orderSize = 5;
+
+const totalValue = (orderPrice * orderSize).toFixed(2);
+console.log(
+  `💵 5 SHARES ORDER → ${side} ${orderSize} shares @ $${orderPrice.toFixed(2)} = $${totalValue} (bestAsk=$${bestAsk})`
+);
+
+
   if (!TRADE_CONFIG.enabled) {
     console.log(`⚠️ Trading disabled in config - order not placed`);
     return { simulated: true, success: true };
   }
-  
-  if (!clobClient || !wallet) {
+
+  if (!clobClient) {
     console.log(`⚠️ CLOB client not initialized - cannot place order`);
     return { simulated: true, success: false, error: 'Client not initialized' };
   }
-  
+
   try {
     console.log(`📝 Creating order for token ${tokenId.substring(0, 10)}...`);
-    console.log(`   Side: ${side} | Price: $${price} | Size: ${size} shares`);
-    
-    // Create order using CLOB client
-    const orderArgs = {
-      tokenID: tokenId.toString(),
-      price: price.toString(),
-      size: size.toString(),
-      side: side.toUpperCase(), // BUY or SELL
-      feeRateBps: '0',
-      nonce: Date.now()
-    };
-    
+
+    // ✅ CORRECT SIDE MAPPING (UP/DOWN → BUY/SELL)
+    const clobSide =
+      side === 'BUY' || side === 'UP'
+        ? Side.BUY
+        : Side.SELL;
+
+    // ✅ USE CALCULATED VALUES (ensure strings)
+   const orderArgs = {
+  tokenID: tokenId.toString(),
+  price: orderPrice.toString(),      // string
+  size: orderSize.toString(),        // string
+  side: clobSide,
+  feeRateBps: '0',
+};
+
+
+
+
     console.log(`🔐 Signing order with wallet...`);
-    
-    // Create and sign order using CLOB client
+    console.log(`🔐 SIGNING PAYLOAD:`, orderArgs);
+
     const signedOrder = await clobClient.createOrder(orderArgs);
-    
+
     console.log(`📤 Submitting order to Polymarket CLOB...`);
-    
-    // Submit the signed order
+
     const orderResponse = await clobClient.postOrder(signedOrder);
-    
-    console.log(`✅ Order submitted successfully!`);
-    console.log(`   Order ID: ${orderResponse.orderID || 'pending'}`);
-    console.log(`   Status: ${orderResponse.status || 'LIVE'}`);
-    
-    return {
-      simulated: false,
-      success: true,
-      orderId: orderResponse.orderID || `order_${Date.now()}`,
-      status: orderResponse.status || 'LIVE',
-      response: orderResponse
-    };
-    
+
+    const isSuccess =
+      orderResponse.success !== false &&
+      (!orderResponse.status || orderResponse.status < 400);
+
+    if (isSuccess) {
+      console.log(`✅ Order submitted successfully!`);
+      console.log(`   Order ID: ${orderResponse.orderID || 'pending'}`);
+
+      return {
+        simulated: false,
+        success: true,
+        orderId: orderResponse.orderID || `order_${Date.now()}`,
+        status: orderResponse.status || 'LIVE',
+        response: orderResponse
+      };
+    } else {
+      throw new Error(orderResponse.error || 'Order submission failed');
+    }
+
   } catch (error) {
     console.error(`❌ Order placement failed:`, error.message);
-    
-    // Log more details for debugging
+
+    let errorMsg = error.message;
+
+    if (error.message.includes('not enough balance')) {
+      errorMsg =
+        'Insufficient USDC balance or allowance. Fund your wallet and approve Polymarket contract.';
+    } else if (error.message.includes('API Credentials')) {
+      errorMsg =
+        'API Credentials missing. Get them from https://polymarket.com/ → Settings → API Keys';
+    }
+
     if (error.response) {
       console.error(`   API Response:`, error.response.data || error.response);
     }
-    
+
     return {
       simulated: false,
       success: false,
-      error: error.message
+      error: errorMsg
     };
   }
 }
 
-/**
- * Fetch historical market data from Polymarket API
- * Gets real past BTC UP/DOWN markets with actual outcomes
- */
+
 async function fetchHistoricalData() {
   try {
     console.log(`📊 Fetching recently CLOSED BTC UP/DOWN markets from Polymarket...`);
@@ -435,10 +581,11 @@ async function fetchHistoricalData() {
               currentPrice = parseFloat(market.tokens[0]?.price || 0.5);
             }
             
-            const priceDelta = (currentPrice - 0.5) * 1000;
             
+            // No historical price delta available, set to 0
+            const priceDelta = 0;
             console.log(`      ✅ RESOLVED: ${result} won | Price: ${currentPrice.toFixed(3)} | Delta: ${priceDelta.toFixed(0)}`);
-            
+
             events.push({
               event: events.length + 1,
               marketId: market.id,
@@ -497,9 +644,9 @@ function algoSmartApe(marketData) {
   const { delta, timeLeft } = marketData;
   
   if (delta > 100 && timeLeft < 240) {
-    return { signal: 'UP', shares: 10, reason: 'Strong upward momentum with time pressure' };
+    return { signal: 'UP', shares: 5, reason: 'Strong upward momentum with time pressure' };
   } else if (delta < -100 && timeLeft < 240) {
-    return { signal: 'DOWN', shares: 10, reason: 'Strong downward momentum with time pressure' };
+    return { signal: 'DOWN', shares: 5, reason: 'Strong downward momentum with time pressure' };
   }
   
   return { signal: 'NONE', shares: 0, reason: 'Conditions not met' };
@@ -518,11 +665,11 @@ function algoSmartApe(marketData) {
  */
 function algoDeltaTimeMomentum(marketData) {
   const { delta, timeLeft } = marketData;
-  
-  if (delta > 50 && timeLeft < 150) {
-    return { signal: 'UP', shares: 10, reason: 'Delta > +50 and time < 150s' };
+  console.log(`   📈 Delta: ${delta.toFixed(2)}, Time Left: ${timeLeft}s`);
+  if (delta > 10) {
+    return { signal: 'UP', shares: 5, reason: 'Delta > +50 and time < 150s' };
   } else if (delta < -50 && timeLeft < 150) {
-    return { signal: 'DOWN', shares: 10, reason: 'Delta < -50 and time < 150s' };
+    return { signal: 'DOWN', shares: 5, reason: 'Delta < -50 and time < 150s' };
   }
   
   return { signal: 'NONE', shares: 0, reason: 'Conditions not met' };
@@ -602,8 +749,31 @@ app.post('/api/deploy', async (req, res) => {
   try {
     const { algo } = req.query;
     
+    // Check if it's a custom algorithm
+    if (algo && algo.startsWith('custom_')) {
+      if (!customAlgorithms.has(algo)) {
+        return res.status(404).json({ error: 'Custom algorithm not found' });
+      }
+      
+      console.log(`🚀 Deploying custom algorithm ${algo} for live trading...`);
+      
+      const sessionId = `session_${Date.now()}`;
+      const marketSlug = generateMarketSlug();
+      
+      // Start live trading with custom algorithm
+      startLiveTrading(sessionId, algo, marketSlug);
+      
+      return res.json({
+        success: true,
+        message: `Custom algorithm deployed successfully`,
+        sessionId,
+        marketSlug
+      });
+    }
+    
+    // Built-in algorithms
     if (!algo || !['algo1', 'algo2'].includes(algo)) {
-      return res.status(400).json({ error: 'Invalid algo parameter. Use algo1 or algo2' });
+      return res.status(400).json({ error: 'Invalid algo parameter. Use algo1, algo2, or custom algorithm ID' });
     }
     
     console.log(`🚀 Deploying ${algo} for live trading...`);
@@ -655,6 +825,190 @@ app.post('/api/stop', (req, res) => {
   }
 });
 
+/**
+ * POST /api/create-algo
+ * Create a custom algorithm from natural language description
+ */
+app.post('/api/create-algo', async (req, res) => {
+  try {
+    const { description } = req.body;
+    
+    if (!description || description.trim().length === 0) {
+      return res.status(400).json({ error: 'Description is required' });
+    }
+    
+    console.log(`🤖 Creating algorithm from: "${description}"`);
+    
+    // Template-based algorithm generator (no external API needed)
+    const desc = description.toLowerCase();
+    let generatedCode = '';
+    let algoName = '';
+    
+    // Parse natural language for parameters
+    let deltaThreshold = 50;
+    let timeThreshold = 180;
+    let priceThreshold = 0.5;
+    let direction = 'BOTH'; // UP, DOWN, or BOTH
+    let shares = 10;
+    
+    // Extract delta threshold (e.g., "delta 100", "delta greater than 60")
+    const deltaMatch = desc.match(/delta.*?(\d+)/);
+    if (deltaMatch) deltaThreshold = parseInt(deltaMatch[1]);
+    
+    // Extract time threshold (e.g., "2 minutes", "150 seconds", "3 min")
+    const timeMatch = desc.match(/(\d+)\s*(minute|min|second|sec|s\b)/);
+    if (timeMatch) {
+      const value = parseInt(timeMatch[1]);
+      const unit = timeMatch[2];
+      timeThreshold = unit.startsWith('min') ? value * 60 : value;
+    }
+    
+    // Extract price threshold (e.g., "price 0.40", "below 0.35", "40%")
+    const priceMatch = desc.match(/(?:price|below|above|under|over).*?(\d+\.?\d*)/);
+    if (priceMatch) {
+      priceThreshold = parseFloat(priceMatch[1]);
+      if (priceThreshold > 1) priceThreshold /= 100; // Convert percentage
+    }
+    
+    // Extract shares (e.g., "buy 20 shares", "order size 15")
+    const sharesMatch = desc.match(/(?:buy|order|place).*?(\d+)\s*(?:share|unit|contract)?/);
+    if (sharesMatch) shares = parseInt(sharesMatch[1]);
+    // Ensure shares is at least 1
+    if (!shares || shares < 1) shares = 1;
+    
+    // Determine direction
+    if ((desc.includes('buy up') || desc.includes('go long') || desc.includes('bullish')) && !desc.includes('down')) {
+      direction = 'UP';
+    } else if (desc.includes('buy down') || desc.includes('sell') || desc.includes('short') || desc.includes('bearish')) {
+      direction = 'DOWN';
+    }
+    
+    // Generate algorithm based on parsed conditions
+    if (desc.includes('price drop') || desc.includes('price falls') || desc.includes('price below')) {
+      // Price-based strategy
+      algoName = `Price Drop Strategy (${priceThreshold})`;
+      generatedCode = `function customAlgorithm(marketData) {
+  const { delta, timeLeft, upPrice, downPrice } = marketData;
+  
+  // Strategy: ${description}
+  if (upPrice < ${priceThreshold} && timeLeft < ${timeThreshold}) {
+    return { 
+      signal: 'UP', 
+      shares: ${shares}, 
+      reason: \`UP price \${upPrice.toFixed(3)} dropped below ${priceThreshold}, \${timeLeft}s remaining\`
+    };
+  }
+  
+  if (downPrice < ${priceThreshold} && timeLeft < ${timeThreshold}) {
+    return { 
+      signal: 'DOWN', 
+      shares: ${shares}, 
+      reason: \`DOWN price \${downPrice.toFixed(3)} dropped below ${priceThreshold}, \${timeLeft}s remaining\`
+    };
+  }
+  
+  return { signal: 'NONE', shares: 0, reason: 'Price conditions not met' };
+}`;
+    } else if (desc.includes('price increase') || desc.includes('price rise') || desc.includes('momentum')) {
+      // Momentum strategy
+      algoName = `Momentum Strategy (${deltaThreshold})`;
+      generatedCode = `function customAlgorithm(marketData) {
+  const { delta, timeLeft, upPrice, downPrice } = marketData;
+  
+  // Strategy: ${description}
+  if (delta > ${deltaThreshold} && timeLeft < ${timeThreshold}) {
+    return { 
+      signal: 'UP', 
+      shares: ${shares}, 
+      reason: \`Strong UP momentum: delta \${delta} > ${deltaThreshold}, \${timeLeft}s left\`
+    };
+  }
+  
+  if (delta < -${deltaThreshold} && timeLeft < ${timeThreshold}) {
+    return { 
+      signal: 'DOWN', 
+      shares: ${shares}, 
+      reason: \`Strong DOWN momentum: delta \${delta} < -${deltaThreshold}, \${timeLeft}s left\`
+    };
+  }
+  
+  return { signal: 'NONE', shares: 0, reason: 'Momentum conditions not met' };
+}`;
+    } else {
+      // Default delta + time strategy
+      algoName = `Custom Strategy (Δ${deltaThreshold}, ${timeThreshold}s)`;
+      const targetSignal = direction === 'UP' ? 'UP' : (direction === 'DOWN' ? 'DOWN' : 'delta-based');
+      
+      generatedCode = `function customAlgorithm(marketData) {
+  const { delta, timeLeft, upPrice, downPrice } = marketData;
+  
+  // Strategy: ${description}
+  // Conditions: delta threshold=${deltaThreshold}, time<${timeThreshold}s
+  
+  ${direction === 'BOTH' ? `
+  if (Math.abs(delta) > ${deltaThreshold} && timeLeft < ${timeThreshold}) {
+    const signal = delta > 0 ? 'UP' : 'DOWN';
+    return { 
+      signal, 
+      shares: ${shares}, 
+      reason: \`Delta \${delta} exceeds ±${deltaThreshold} with \${timeLeft}s remaining\`
+    };
+  }` : `
+  if (delta ${direction === 'UP' ? '>' : '<'} ${direction === 'UP' ? deltaThreshold : -deltaThreshold} && timeLeft < ${timeThreshold}) {
+    return { 
+      signal: '${direction}', 
+      shares: ${shares}, 
+      reason: \`${direction} signal: delta \${delta}, \${timeLeft}s remaining\`
+    };
+  }`}
+  
+  return { signal: 'NONE', shares: 0, reason: 'Conditions not met' };
+}`;
+    }
+    
+    // Generate unique ID for this custom algorithm
+    const algoId = `custom_${Date.now()}`;
+    
+    // Store the custom algorithm
+    customAlgorithms.set(algoId, {
+      id: algoId,
+      name: algoName,
+      description,
+      code: generatedCode,
+      createdAt: new Date().toISOString()
+    });
+    
+    console.log(`✅ Custom algorithm created: ${algoId} - ${algoName}`);
+    
+    res.json({
+      success: true,
+      algorithmId: algoId,
+      name: algoName,
+      description,
+      code: generatedCode,
+      message: 'Algorithm created successfully (template-based)'
+    });
+    
+  } catch (error) {
+    console.error('❌ Algorithm creation error:', error);
+    res.status(500).json({ error: error.message || 'Failed to create algorithm' });
+  }
+});
+
+/**
+ * GET /api/custom-algos
+ * Get list of custom algorithms
+ */
+app.get('/api/custom-algos', (req, res) => {
+  const algos = Array.from(customAlgorithms.values()).map(algo => ({
+    id: algo.id,
+    description: algo.description,
+    createdAt: algo.createdAt
+  }));
+  
+  res.json({ success: true, algorithms: algos });
+});
+
 // ==========================================
 // LIVE TRADING ENGINE
 // ==========================================
@@ -665,7 +1019,32 @@ app.post('/api/stop', (req, res) => {
 async function startLiveTrading(sessionId, algoName, marketSlug) {
   console.log(`\n🔍 Resolving market: ${marketSlug}`);
   
-  const algoFunction = algoName === 'algo1' ? algoSmartApe : algoDeltaTimeMomentum;
+  // Get algorithm function
+  let algoFunction;
+  if (algoName === 'algo1') {
+    algoFunction = algoSmartApe;
+  } else if (algoName === 'algo2') {
+    algoFunction = algoDeltaTimeMomentum;
+  } else if (algoName.startsWith('custom_')) {
+    // Load custom algorithm
+    const customAlgo = customAlgorithms.get(algoName);
+    if (!customAlgo) {
+      console.error(`❌ Custom algorithm ${algoName} not found`);
+      return;
+    }
+    
+    // Execute the generated code to get the function
+    try {
+      eval(customAlgo.code); // This defines customAlgorithm function
+      algoFunction = customAlgorithm;
+      console.log(`✅ Loaded custom algorithm: ${customAlgo.description}`);
+    } catch (err) {
+      console.error(`❌ Failed to load custom algorithm:`, err.message);
+      return;
+    }
+  } else {
+    algoFunction = algoSmartApe; // Default
+  }
   
   try {
     // Resolve market tokens
@@ -695,7 +1074,8 @@ async function startLiveTrading(sessionId, algoName, marketSlug) {
       endDate: endDate,
       autoRotate: true,
       connectionAttempts: 0,
-      liveTrading: TRADE_CONFIG.enabled
+      liveTrading: TRADE_CONFIG.enabled,
+      orderPlaced: false  // Track if order has been placed for custom algo
     };
     
     // Create real-time data client
@@ -861,19 +1241,46 @@ async function evaluateAlgoConditions(sessionId, algoFunction, message, marketSl
     const imbalance = totalBidVolume - totalAskVolume;
     const simulatedDelta = imbalance * 10; // Scale factor
     
+    // Extract upPrice and downPrice for custom algos
+    // Extract upPrice and downPrice from price_change event if available
+    let upPrice = 0.5;
+    let downPrice = 0.5;
+    if (message.type === 'price_change' && Array.isArray(payload.pc)) {
+      // Find UP and DOWN asset prices from Polymarket convention
+      // Usually, the first asset is UP, the second is DOWN, but check both
+      if (payload.pc.length >= 2) {
+        // Try to match by asset index: 0 = UP, 1 = DOWN
+        upPrice = parseFloat(payload.pc[0].p) || 0.5;
+        downPrice = parseFloat(payload.pc[1].p) || 0.5;
+      } else if (payload.pc.length === 1) {
+        upPrice = parseFloat(payload.pc[0].p) || 0.5;
+      }
+    } else {
+      // Fallback to asks/bids
+      upPrice = asks[0] ? parseFloat(asks[0].price) : 0.5;
+      downPrice = bids[0] ? parseFloat(bids[0].price) : 0.5;
+    }
+    console.log(`[${sessionId}] upPrice: ${upPrice}, downPrice: ${downPrice}, delta: ${simulatedDelta}, timeLeft: ${timeLeftSeconds}`);
     const marketData = {
       delta: simulatedDelta,
       timeLeft: timeLeftSeconds,
       bids,
-      asks
+      asks,
+      upPrice,
+      downPrice
     };
-    
     // Evaluate algo
     const signal = algoFunction(marketData);
     
     if (signal.signal !== 'NONE') {
       // Get session data
       const session = activeSessions.get(sessionId);
+      
+      // Check if order already placed for custom algo (stop after first order)
+      if (session.orderPlaced) {
+        console.log(`⏹️ [${sessionId}] Order already placed for this session - skipping (one order limit)`);
+        return;
+      }
       
       // Log trade execution
       console.log(`\n🎯 [${sessionId}] TRADE SIGNAL DETECTED!`);
@@ -883,10 +1290,11 @@ async function evaluateAlgoConditions(sessionId, algoFunction, message, marketSl
       console.log(`   Delta: ${simulatedDelta.toFixed(2)}`);
       console.log(`   Time Left: ${timeLeftSeconds}s`);
       
-      // Get best price from order book
-      const bestPrice = signal.signal === 'UP' 
-        ? (asks[0]?.price || '0.50')
-        : (bids[0]?.price || '0.50');
+      // Validate signal has shares
+      if (!signal.shares || signal.shares <= 0) {
+        console.error(`❌ [${sessionId}] Cannot place order: shares is zero or undefined.`);
+        return;
+      }
       
       // Determine which token to buy
       const tokenIndex = signal.signal === 'UP' ? 0 : 1;
@@ -896,14 +1304,16 @@ async function evaluateAlgoConditions(sessionId, algoFunction, message, marketSl
       console.log(`   Token: ${tokenId}`);
       console.log(`   Direction: ${signal.signal}`);
       console.log(`   Size: ${signal.shares} shares`);
-      console.log(`   Price: $${bestPrice}`);
       console.log(`   💼 Wallet: ${WALLET_ADDRESS}`);
       
       // Place the order
       try {
-        const orderResult = await placeOrder(tokenId, 'BUY', parseFloat(bestPrice), signal.shares);
+        const orderResult = await placeOrder(tokenId, 'BUY');
         
         if (orderResult.success) {
+          // Mark order as placed to prevent future orders
+          session.orderPlaced = true;
+          
           console.log(`\n🎯 ===== TRADE EXECUTED =====`);
           console.log(`   Order ID: ${orderResult.orderId}`);
           console.log(`   Signal: ${signal.signal}`);
@@ -915,6 +1325,7 @@ async function evaluateAlgoConditions(sessionId, algoFunction, message, marketSl
           console.log(`   Status: ${orderResult.status || 'LIVE'}`);
           if (!orderResult.simulated) {
             console.log(`   ✅ REAL ORDER PLACED ON POLYMARKET!`);
+            console.log(`   🛑 One order limit reached - no more orders will be placed`);
           } else {
             console.log(`   ⚠️ Simulated order (check configuration)`);
           }
@@ -923,6 +1334,7 @@ async function evaluateAlgoConditions(sessionId, algoFunction, message, marketSl
           console.log(`\n❌ ===== TRADE FAILED =====`);
           console.log(`   Error: ${orderResult.error || 'Unknown error'}`);
           console.log(`===========================\n`);
+          console.log('   ⚠️ Trade not executed due to error', orderResult.error || 'Unknown error');
         }
         
         session.tradesExecuted++;
@@ -940,7 +1352,6 @@ async function evaluateAlgoConditions(sessionId, algoFunction, message, marketSl
         sessionId,
         signal: signal.signal,
         shares: signal.shares,
-        price: bestPrice,
         reason: signal.reason,
         delta: simulatedDelta.toFixed(2),
         timeLeft: timeLeftSeconds,

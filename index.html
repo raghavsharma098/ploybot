@@ -117,6 +117,25 @@
       box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1);
     }
 
+    .form-textarea {
+      width: 100%;
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 8px;
+      color: white;
+      font-size: 14px;
+      font-family: inherit;
+      resize: vertical;
+      transition: all 0.3s ease;
+    }
+
+    .form-textarea:focus {
+      outline: none;
+      border-color: #00d4ff;
+      box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1);
+    }
+
     .btn {
       width: 100%;
       padding: 14px 24px;
@@ -435,6 +454,39 @@
         <div id="statusLog" class="status-log hidden"></div>
       </div>
     </div>
+
+    <!-- Natural Language Algo Creation (BONUS) -->
+    <div class="card" style="margin-top: 24px;">
+      <div class="card-title">🤖 Natural Language Algo Creator (Bonus)</div>
+      
+      <div class="form-group">
+        <label class="form-label">Describe Your Trading Strategy</label>
+        <textarea 
+          id="nlDescription" 
+          class="form-textarea" 
+          placeholder="Example: Buy UP if price drops below 0.40 and there's less than 2 minutes remaining. Buy DOWN if price goes above 0.60 with less than 2 minutes left."
+          rows="3"
+        ></textarea>
+      </div>
+
+      <button id="createAlgoBtn" class="btn btn-primary">
+        Generate Algorithm with AI
+      </button>
+
+      <div id="generatedAlgoResult" class="results hidden" style="margin-top: 16px;">
+        <h4 style="color: #00ff88; margin-bottom: 12px;">✅ Algorithm Generated!</h4>
+        <div style="background: rgba(0,0,0,0.3); padding: 12px; border-radius: 8px; margin-bottom: 12px;">
+          <strong>Description:</strong> <span id="algoDescription"></span>
+        </div>
+        <details style="background: rgba(0,0,0,0.3); padding: 12px; border-radius: 8px; margin-bottom: 12px;">
+          <summary style="cursor: pointer; color: #00d4ff;">View Generated Code</summary>
+          <pre id="algoCode" style="margin-top: 12px; white-space: pre-wrap; font-size: 11px; color: #aaa;"></pre>
+        </details>
+        <button id="deployCustomAlgoBtn" class="btn btn-success">
+          Deploy This Algorithm
+        </button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -444,6 +496,7 @@
     
     let currentSessionId = null;
     let ws = null;
+    let generatedAlgoId = null;
 
     // ==========================================
     // DOM ELEMENTS
@@ -464,6 +517,14 @@
     const statusLog = document.getElementById('statusLog');
     const connectionIndicator = document.getElementById('connectionIndicator');
     const connectionText = document.getElementById('connectionText');
+
+    // Natural Language elements
+    const nlDescription = document.getElementById('nlDescription');
+    const createAlgoBtn = document.getElementById('createAlgoBtn');
+    const generatedAlgoResult = document.getElementById('generatedAlgoResult');
+    const algoDescription = document.getElementById('algoDescription');
+    const algoCode = document.getElementById('algoCode');
+    const deployCustomAlgoBtn = document.getElementById('deployCustomAlgoBtn');
 
     // ==========================================
     // ALGO INFO UPDATE
@@ -706,8 +767,98 @@
     }
 
     // ==========================================
+    // NATURAL LANGUAGE ALGO CREATION
+    // ==========================================
+
+    async function loadCustomAlgorithms() {
+      try {
+        const response = await fetch('/api/custom-algos');
+        const data = await response.json();
+        
+        if (data.algorithms && data.algorithms.length > 0) {
+          // Add custom algorithms to the dropdown
+          data.algorithms.forEach(algo => {
+            const option = document.createElement('option');
+            option.value = algo.id;
+            option.textContent = `${algo.name} (Custom)`;
+            liveAlgoSelect.appendChild(option);
+          });
+        }
+      } catch (error) {
+        console.error('Failed to load custom algorithms:', error);
+      }
+    }
+
+    createAlgoBtn.addEventListener('click', async () => {
+      const description = nlDescription.value.trim();
+      
+      if (!description) {
+        alert('Please enter a strategy description');
+        return;
+      }
+
+      createAlgoBtn.disabled = true;
+      createAlgoBtn.textContent = 'Generating...';
+
+      try {
+        const response = await fetch('/api/create-algo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          generatedAlgoId = data.algorithmId;
+          
+          // Display the generated algorithm
+          algoDescription.textContent = data.name;
+          algoCode.textContent = data.code;
+          generatedAlgoResult.classList.remove('hidden');
+          
+          console.log('✅ Algorithm generated:', data.name);
+          console.log('📝 ID:', data.algorithmId);
+          
+          // Add to dropdown immediately
+          const option = document.createElement('option');
+          option.value = data.algorithmId;
+          option.textContent = `${data.name} (Custom)`;
+          liveAlgoSelect.appendChild(option);
+          
+        } else {
+          alert('Failed to generate algorithm: ' + (data.error || 'Unknown error'));
+        }
+      } catch (error) {
+        console.error('Error generating algorithm:', error);
+        alert('Failed to generate algorithm. Check console for details.');
+      } finally {
+        createAlgoBtn.disabled = false;
+        createAlgoBtn.textContent = 'Generate Algorithm with AI';
+      }
+    });
+
+    deployCustomAlgoBtn.addEventListener('click', async () => {
+      if (!generatedAlgoId) {
+        alert('No algorithm generated yet');
+        return;
+      }
+
+      // Set the dropdown to the generated algorithm
+      liveAlgoSelect.value = generatedAlgoId;
+      
+      // Trigger the deploy button click
+      deployBtn.click();
+      
+      console.log('🚀 Deploying custom algorithm:', generatedAlgoId);
+    });
+
+    // ==========================================
     // INITIALIZATION
     // ==========================================
+    
+    // Load custom algorithms on page load
+    loadCustomAlgorithms();
     
     console.log('🚀 Algo Trading Portal Initialized');
   </script>
